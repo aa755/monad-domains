@@ -22,6 +22,8 @@ contract DomainSpoke is IDomainSpoke {
     error OutOfOrderNonce();
     error NotFailedMessage();
     error RetryFailed();
+    error NotDelivery();
+    error NotFromHub();
     error SameDomain();
     error ZeroTarget();
     error ZeroSalt();
@@ -44,7 +46,8 @@ contract DomainSpoke is IDomainSpoke {
     address public immutable HUB;
 
     // Storage layout: the domain RPC reads `policyOwners` (slot 2) and `logReaders` (slot 6)
-    // directly from state, so these declarations must not be reordered.
+    // and the encryption precompile reads `viewingKeys` (slot 7) directly from state, so these
+    // declarations must not be reordered.
 
     /// @notice Number of domain-origin messages recorded so far; the nonce the next one gets.
     uint256 public domainMessageCount;
@@ -63,6 +66,8 @@ contract DomainSpoke is IDomainSpoke {
     /// @notice Accounts besides the policy owner that the domain RPC lets read every log of a
     /// contract.
     mapping(address target => mapping(address reader => bool allowed)) public logReaders;
+    /// @notice Viewing key of each other domain, as the hub last sent it.
+    mapping(uint64 domainChainId => bytes viewingKey) public viewingKeys;
 
     modifier onlyPolicyOwner(address target) {
         address policyOwner = policyOwners[target];
@@ -183,6 +188,20 @@ contract DomainSpoke is IDomainSpoke {
             if lt(budget, gasReserve) { revert(0, 0) }
             success := call(sub(budget, gasReserve), target, 0, add(input, 32), mload(input), 0, 0)
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Hub messages to this spoke
+    // ---------------------------------------------------------------------
+
+    /// @notice Stores a viewing key the hub sent. Reached only through this spoke's own
+    /// delivery of a message whose source is the L1 and whose sender is the hub.
+    function onDomainMessage(uint64 sourceChainId, address from, bytes calldata data) external {
+        if (msg.sender != address(this)) revert NotDelivery();
+        if (sourceChainId != L1_CHAIN_ID || from != HUB) revert NotFromHub();
+        (uint64 domainChainId, bytes memory viewingKey) = MessageLib.decodeViewingKey(data);
+        viewingKeys[domainChainId] = viewingKey;
+        emit ViewingKeySet(domainChainId, viewingKey);
     }
 
     // ---------------------------------------------------------------------
