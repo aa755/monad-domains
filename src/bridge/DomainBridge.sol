@@ -35,7 +35,7 @@ contract DomainBridge is IDomainMessageReceiver {
     uint64 internal immutable _L1_CHAIN_ID;
 
     /// @notice Bridged token per L1 token address.
-    mapping(address => BridgedERC20) public bridgedTokens;
+    mapping(address l1Token => BridgedERC20 token) public bridgedTokens;
 
     event BridgedTokenDeployed(address indexed l1Token, address token);
     event DepositFinalized(address indexed recipient, address indexed l1Token, uint256 amount);
