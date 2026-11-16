@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.31;
 
 import {IDomainAccessControl, IDomainAccessPolicy} from "../interfaces/IDomainAccessControl.sol";
 
@@ -80,10 +80,24 @@ contract DomainAccessRules is IDomainAccessPolicy {
         // words are visited by increasing offset, so the first one the calldata does not reach
         // in full ends the scan. Every reached listed word must be a canonical ABI address,
         // rejected rather than truncated, even when another listed word already matched.
+        //
+        // Each pass takes the lowest bit still set in `subjects` and goes straight to its word,
+        // so unset bits take no passes. With `subjects = 0b1000_0000_0000_0100` the loop runs
+        // twice: word 2 at offset 68, then word 15 at offset 484.
         bool matched;
         uint256 subjects = rule.subjectArguments;
-        for (uint256 offset = 4; subjects != 0; (offset, subjects) = (offset + 32, subjects >> 1)) {
-            if ((subjects & 1) == 0) continue;
+        while (subjects != 0) {
+            uint256 offset;
+            assembly ("memory-safe") {
+                // `sub(0, x)` is -x, and `x & -x` keeps only the lowest set bit of x: 0b0100 in
+                // the example above.
+                let bit := and(subjects, sub(0, subjects))
+                // Clear that bit, so the next pass finds the one above it.
+                subjects := xor(subjects, bit)
+                // A word whose only set bit is bit i has 255 - i leading zeros, so
+                // i = 255 - clz(bit). Word i starts at byte 4 + 32 * i (`shl(5, i)` is 32 * i).
+                offset := add(4, shl(5, sub(255, clz(bit))))
+            }
             if (data.length < offset + 32) break;
             uint256 word;
             assembly ("memory-safe") {
