@@ -1,13 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^0.8.24;
 
+import {ICommonErrors} from "./ICommonErrors.sol";
 import {IDomainAccessControl} from "./IDomainAccessControl.sol";
 import {MessageLib} from "../libraries/MessageLib.sol";
+
+/// @notice Errors of retrying a failed message, which the hub and the spoke share.
+/// @dev `IDomainHub` and `IDomainSpoke` inherit these errors rather than each declaring them, so
+/// one contract can inherit both interfaces.
+interface IRetryErrors {
+    /// @notice The message is not marked as failed, so it cannot be retried.
+    error NotFailedMessage();
+    /// @notice The retried call failed again, with `reason` as the target's revert data; the
+    /// message stays retryable. The spoke leaves `reason` empty when the target has no code.
+    error RetryFailed(bytes reason);
+}
 
 /// @notice L1-side hub of the domain messaging layer: the single L1 contract every domain connects
 /// through. It registers domains, sequences their transactions, records L1 -> domain messages, and
 /// stores the state roots and domain-origin message anchors each domain's validators attest.
-interface IDomainHub {
+interface IDomainHub is ICommonErrors, IRetryErrors {
     event DomainRegistered(uint64 indexed domainChainId, address indexed feeRecipient, uint64 checkpointInterval);
 
     /// @notice The viewing public key senders encrypt domain transactions and messages to, as a
@@ -76,6 +88,58 @@ interface IDomainHub {
         uint256 nonce,
         uint256 fee
     );
+
+    /// @notice The domain is already registered.
+    error DomainAlreadyRegistered();
+    /// @notice The quorum is zero.
+    error ZeroQuorum();
+    /// @notice The quorum is larger than the validator set.
+    error QuorumExceedsValidators();
+    /// @notice The checkpoint interval is zero.
+    error ZeroCheckpointInterval();
+    /// @notice The limit on unattested checkpoint periods is outside 1 to 50.
+    error InvalidMaxUnattestedPeriods();
+    /// @notice The viewing key is neither empty nor 32 bytes.
+    error InvalidViewingKey();
+    /// @notice The validator set lists a validator twice.
+    error DuplicateValidator();
+    /// @notice `domainChainId` is not a registered domain.
+    error DomainNotRegistered(uint64 domainChainId);
+    /// @notice The block number is not above the last attested one.
+    error StaleBlockNumber();
+    /// @notice The block number is not below the current L1 block.
+    error BlockNumberNotInPast();
+    /// @notice The block number is not a multiple of the domain's checkpoint interval.
+    error BlockNumberOffSchedule();
+    /// @notice `signer`, recovered from the signature, is not one of the domain's validators.
+    error NotValidator(address signer);
+    /// @notice The validator has already signed this transition.
+    error AlreadyVoted();
+    /// @notice The message has already been relayed.
+    error MessageAlreadyRelayed();
+    /// @notice The source domain's validators never attested this anchor.
+    error UnknownAnchor();
+    /// @notice The proof does not place the message under the anchor.
+    error InvalidProof();
+    /// @notice A message to the L1 was relayed with value attached.
+    error UnexpectedL1CallbackFee();
+    /// @notice The input would take the domain past `DOMAIN_BLOCK_GAS_LIMIT` in this L1 block.
+    error DomainBlockGasLimitExceeded();
+    /// @notice The input would take the domain past `DOMAIN_BLOCK_WORD_LIMIT` in this L1 block.
+    error DomainBlockSizeLimitExceeded();
+    /// @notice The domain's fee recipient did not accept the fee.
+    error FeeTransferFailed();
+    /// @notice `fee` is below `minFee`, the `minDeliveryFee` for the payload.
+    error DeliveryFeeTooLow(uint256 fee, uint256 minFee);
+    /// @notice `fee` is below `minFee`, the `minSequencingFee` for the payload.
+    error SequencingFeeTooLow(uint256 fee, uint256 minFee);
+    /// @notice The domain's input queue has no room for the input.
+    error InputQueueFull();
+    /// @notice `primeInputQueue` was given words past the end of the queue.
+    error InputQueueBadIndex();
+    /// @notice The input would open a checkpoint period `maxUnattestedPeriods` or more past the
+    /// oldest unattested one: the domain takes no inputs until its validators attest.
+    error TooManyUnattestedPeriods();
 
     // --- Registration ---
 
@@ -260,7 +324,7 @@ interface IDomainHub {
 /// records domain-origin messages by nonce and receives the L1 -> domain messages the domain
 /// client delivers as system transactions. It also holds the access-control configuration the
 /// domain client and RPC enforce.
-interface IDomainSpoke is IDomainAccessControl {
+interface IDomainSpoke is IDomainAccessControl, IRetryErrors {
     /// @notice Full encoded domain-origin envelope, whether addressed to L1 or another domain.
     event DomainMessageRecorded(bytes32 indexed messageId, bytes message);
 
@@ -274,6 +338,11 @@ interface IDomainSpoke is IDomainAccessControl {
         uint256 nonce,
         bool success
     );
+
+    /// @notice The delivery's nonce is below `nextL1Nonce`.
+    error OutOfOrderNonce();
+    /// @notice `sendDomainMessage` was given a zero salt.
+    error ZeroSalt();
 
     // --- Deployment binding ---
 

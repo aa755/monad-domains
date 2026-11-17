@@ -10,38 +10,7 @@ import {MessageLib} from "./libraries/MessageLib.sol";
 import {InputQueue} from "./libraries/InputQueue.sol";
 
 contract DomainHub is IDomainHub, EIP712 {
-    error L1ChainIdNotAllowed();
-    error DomainAlreadyRegistered();
-    error ZeroQuorum();
-    error QuorumExceedsValidators();
-    error ZeroFeeRecipient();
-    error ZeroCheckpointInterval();
-    error InvalidMaxUnattestedPeriods();
-    error InvalidViewingKey();
-    error ZeroValidator();
-    error DuplicateValidator();
-    error DomainNotRegistered();
-    error StaleBlockNumber();
-    error BlockNumberNotInPast();
-    error BlockNumberOffSchedule();
-    error NotValidator();
-    error AlreadyVoted();
-    error SameDomain();
-    error SourceNotRegistered();
-    error ZeroTarget();
-    error MessageAlreadyRelayed();
-    error UnknownAnchor();
-    error InvalidProof();
-    error DestinationNotRegistered();
-    error UnexpectedL1CallbackFee();
-    error RetryOnDestinationDomain();
-    error NotFailedMessage();
-    error RetryFailed();
-    error DomainBlockGasLimitExceeded();
-    error DomainBlockSizeLimitExceeded();
-    error FeeTransferFailed();
-    error DeliveryFeeTooLow();
-    error SequencingFeeTooLow();
+    /// @notice The constructor could not deploy the slot number probe.
     error SlotNumberProbeNotDeployed();
 
     /// @notice EIP-712 type of the digest a validator signs to approve a state transition.
@@ -133,12 +102,12 @@ contract DomainHub is IDomainHub, EIP712 {
         uint64 checkpointInterval,
         uint8 maxUnattestedPeriods
     ) external {
-        if (domainChainId == block.chainid) revert L1ChainIdNotAllowed();
+        if (domainChainId == block.chainid) revert InvalidChainId(domainChainId);
         uint256 queue = InputQueue.base(domainChainId);
         if (InputQueue.load(queue, InputQueue.CONFIG) != 0) revert DomainAlreadyRegistered();
         if (quorum == 0) revert ZeroQuorum();
         if (quorum > validators.length) revert QuorumExceedsValidators();
-        if (feeRecipient == address(0)) revert ZeroFeeRecipient();
+        if (feeRecipient == address(0)) revert ZeroAddress();
         if (checkpointInterval == 0) revert ZeroCheckpointInterval();
         if (maxUnattestedPeriods == 0 || maxUnattestedPeriods > InputQueue.MAX_PERIODS) {
             revert InvalidMaxUnattestedPeriods();
@@ -162,7 +131,7 @@ contract DomainHub is IDomainHub, EIP712 {
         config.viewingKey = viewingKey;
         for (uint256 i = 0; i < validators.length; i++) {
             address validator = validators[i];
-            if (validator == address(0)) revert ZeroValidator();
+            if (validator == address(0)) revert ZeroAddress();
             if (config.isValidator[validator]) revert DuplicateValidator();
             config.isValidator[validator] = true;
             config.validators.push(validator);
@@ -239,14 +208,14 @@ contract DomainHub is IDomainHub, EIP712 {
     ) external {
         DomainConfig storage config = _configs[domainChainId];
         uint64 checkpointInterval = config.checkpointInterval;
-        if (checkpointInterval == 0) revert DomainNotRegistered();
+        if (checkpointInterval == 0) revert DomainNotRegistered(domainChainId);
         if (domainBlockNumber <= domainBlockNumbers[domainChainId]) revert StaleBlockNumber();
         if (domainBlockNumber >= block.number) revert BlockNumberNotInPast();
         if (domainBlockNumber % checkpointInterval != 0) revert BlockNumberOffSchedule();
 
         bytes32 digest = stateTransitionDigest(domainChainId, domainBlockNumber, newStateRoot, domainAnchor);
         address signer = ECDSA.recoverCalldata(digest, signature);
-        if (!config.isValidator[signer]) revert NotValidator();
+        if (!config.isValidator[signer]) revert NotValidator(signer);
         if (hasVotedFor[digest][signer]) revert AlreadyVoted();
 
         hasVotedFor[digest][signer] = true;
@@ -279,9 +248,9 @@ contract DomainHub is IDomainHub, EIP712 {
         payable
         returns (bool success)
     {
-        if (message.sourceChainId == message.destinationChainId) revert SameDomain();
-        if (_queueConfig(message.sourceChainId) == 0) revert SourceNotRegistered();
-        if (message.to == address(0)) revert ZeroTarget();
+        if (message.sourceChainId == message.destinationChainId) revert InvalidChainId(message.destinationChainId);
+        if (_queueConfig(message.sourceChainId) == 0) revert DomainNotRegistered(message.sourceChainId);
+        if (message.to == address(0)) revert ZeroAddress();
         bytes32 messageHash = MessageLib.hashDomainMessage(message, block.chainid, address(this));
         if (relayedDomainMessages[message.sourceChainId][messageHash]) revert MessageAlreadyRelayed();
         if (!domainAnchors[message.sourceChainId][anchor]) revert UnknownAnchor();
@@ -289,7 +258,7 @@ contract DomainHub is IDomainHub, EIP712 {
         relayedDomainMessages[message.sourceChainId][messageHash] = true;
 
         if (message.destinationChainId != block.chainid) {
-            if (_queueConfig(message.destinationChainId) == 0) revert DestinationNotRegistered();
+            // `_sendL1Message` rejects a destination that is not registered.
             (uint256 deliveryNonce, uint256 config) = _sendL1Message(
                 message.destinationChainId, message.sourceChainId, message.from, message.to, message.data, msg.value
             );
@@ -312,17 +281,17 @@ contract DomainHub is IDomainHub, EIP712 {
     }
 
     function retryDomainMessage(MessageLib.DomainMessage calldata message) external {
-        if (message.destinationChainId != block.chainid) revert RetryOnDestinationDomain();
+        if (message.destinationChainId != block.chainid) revert InvalidChainId(message.destinationChainId);
         bytes32 messageHash = MessageLib.hashDomainMessage(message, block.chainid, address(this));
         if (!failedDomainMessages[message.sourceChainId][messageHash]) revert NotFailedMessage();
         delete failedDomainMessages[message.sourceChainId][messageHash];
-        (bool success,) = message.to
+        (bool success, bytes memory reason) = message.to
             .call(
                 abi.encodeCall(
                     IDomainMessageReceiver.onDomainMessage, (message.sourceChainId, message.from, message.data)
                 )
             );
-        if (!success) revert RetryFailed();
+        if (!success) revert RetryFailed(reason);
         emit DomainMessageRelayed(
             message.sourceChainId, messageHash, message.from, message.to, message.sourceNonce, true
         );
@@ -338,8 +307,10 @@ contract DomainHub is IDomainHub, EIP712 {
 
     function sequenceToDomain(uint64 domainChainId, bytes calldata rlpTx) external payable {
         uint256 queue = InputQueue.base(domainChainId);
-        uint256 config = _registeredConfig(queue);
-        if (msg.value < minSequencingFee(rlpTx.length)) revert SequencingFeeTooLow();
+        uint256 config = _registeredConfig(domainChainId, queue);
+        if (msg.value < minSequencingFee(rlpTx.length)) {
+            revert SequencingFeeTooLow(msg.value, minSequencingFee(rlpTx.length));
+        }
         _recordInput(queue, config, InputQueue.loadState(queue), InputQueue.TRANSACTION, msg.value, rlpTx);
         emit DomainTransactionSequenced(domainChainId, rlpTx, msg.value);
         _payFee(config, msg.value);
@@ -371,8 +342,8 @@ contract DomainHub is IDomainHub, EIP712 {
         uint256 fee
     ) internal returns (uint256 nonce, uint256 config) {
         uint256 queue = InputQueue.base(domainChainId);
-        config = _registeredConfig(queue);
-        if (fee < minDeliveryFee(data.length)) revert DeliveryFeeTooLow();
+        config = _registeredConfig(domainChainId, queue);
+        if (fee < minDeliveryFee(data.length)) revert DeliveryFeeTooLow(fee, minDeliveryFee(data.length));
         InputQueue.State memory state = InputQueue.loadState(queue);
         nonce = state.messageCount++;
         _recordInput(
@@ -389,8 +360,10 @@ contract DomainHub is IDomainHub, EIP712 {
 
     function sendEncryptedL1Message(uint64 domainChainId, bytes calldata ciphertext) external payable {
         uint256 queue = InputQueue.base(domainChainId);
-        uint256 config = _registeredConfig(queue);
-        if (msg.value < minDeliveryFee(ciphertext.length)) revert DeliveryFeeTooLow();
+        uint256 config = _registeredConfig(domainChainId, queue);
+        if (msg.value < minDeliveryFee(ciphertext.length)) {
+            revert DeliveryFeeTooLow(msg.value, minDeliveryFee(ciphertext.length));
+        }
         uint64 sourceChainId = SafeCast.toUint64(block.chainid);
         InputQueue.State memory state = InputQueue.loadState(queue);
         uint64 nonce = state.messageCount++;
@@ -414,10 +387,10 @@ contract DomainHub is IDomainHub, EIP712 {
     // Input queue
     // ---------------------------------------------------------------------
 
-    /// @dev The config word of `queue`'s domain, which must be registered.
-    function _registeredConfig(uint256 queue) internal view returns (uint256 config) {
+    /// @dev The config word of `queue`, the queue of `domainChainId`, which must be registered.
+    function _registeredConfig(uint64 domainChainId, uint256 queue) internal view returns (uint256 config) {
         config = InputQueue.load(queue, InputQueue.CONFIG);
-        if (config == 0) revert DomainNotRegistered();
+        if (config == 0) revert DomainNotRegistered(domainChainId);
     }
 
     /// @dev Records one input in the domain's queue and counts its gas and its words against the
@@ -502,7 +475,7 @@ contract DomainHub is IDomainHub, EIP712 {
 
     function primeInputQueue(uint64 domainChainId, uint256 from, uint256 count) external {
         uint256 queue = InputQueue.base(domainChainId);
-        _registeredConfig(queue);
+        _registeredConfig(domainChainId, queue);
         InputQueue.prime(queue, from, count);
     }
 }
