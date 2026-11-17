@@ -46,7 +46,7 @@ contract DomainHub is IDomainHub, EIP712 {
 
     /// @notice EIP-712 type of the digest a validator signs to approve a state transition.
     bytes32 public constant STATE_TRANSITION_TYPEHASH = keccak256(
-        "StateTransition(uint64 domainChainId,uint256 stateNonce,uint64 domainBlockNumber,bytes32 newStateRoot,bytes32 domainAnchor)"
+        "StateTransition(uint64 domainChainId,uint256 stateNonce,uint64 domainBlockNumber,bytes32 newBlockHash,bytes32 domainAnchor)"
     );
     /// @notice Length of an X25519 public key: the only accepted viewing key encoding.
     uint256 public constant VIEWING_KEY_LENGTH = 32;
@@ -88,8 +88,9 @@ contract DomainHub is IDomainHub, EIP712 {
 
     /// @dev Registration of each domain, by chain id.
     mapping(uint64 domainChainId => DomainConfig config) internal _configs;
-    /// @notice Latest attested state root of each domain.
-    mapping(uint64 domainChainId => bytes32 stateRoot) public stateRoots;
+    /// @notice Latest attested block hash of each domain: of its last block at or before the
+    /// attested checkpoint. The hash commits to the domain's state root and to its earlier blocks.
+    mapping(uint64 domainChainId => bytes32 blockHash) public blockHashes;
     /// @notice Attested batch roots of domain-origin messages, by source domain.
     mapping(uint64 domainChainId => mapping(bytes32 anchor => bool attested)) public domainAnchors;
     /// @notice Domain-origin messages already relayed, by source domain.
@@ -99,7 +100,7 @@ contract DomainHub is IDomainHub, EIP712 {
     /// @notice Monotonic per-domain transition counter bound into every digest, so a round's
     /// signatures cannot be replayed against a later transition.
     mapping(uint64 domainChainId => uint256 stateNonce) public stateNonces;
-    /// @notice L1 block number of the latest attested state root, not the input queue's domain
+    /// @notice L1 block number of the latest attested block hash, not the input queue's domain
     /// block number; strictly increasing. Starts at the last scheduled height below the
     /// registering L1 block.
     mapping(uint64 domainChainId => uint64 blockNumber) public domainBlockNumbers;
@@ -213,7 +214,7 @@ contract DomainHub is IDomainHub, EIP712 {
     function stateTransitionDigest(
         uint64 domainChainId,
         uint64 domainBlockNumber,
-        bytes32 newStateRoot,
+        bytes32 newBlockHash,
         bytes32 domainAnchor
     ) public view returns (bytes32) {
         return _hashTypedDataV4(
@@ -223,7 +224,7 @@ contract DomainHub is IDomainHub, EIP712 {
                     domainChainId,
                     stateNonces[domainChainId],
                     domainBlockNumber,
-                    newStateRoot,
+                    newBlockHash,
                     domainAnchor
                 )
             )
@@ -233,7 +234,7 @@ contract DomainHub is IDomainHub, EIP712 {
     function submitStateSignature(
         uint64 domainChainId,
         uint64 domainBlockNumber,
-        bytes32 newStateRoot,
+        bytes32 newBlockHash,
         bytes32 domainAnchor,
         bytes calldata signature
     ) external {
@@ -244,20 +245,20 @@ contract DomainHub is IDomainHub, EIP712 {
         if (domainBlockNumber >= block.number) revert BlockNumberNotInPast();
         if (domainBlockNumber % checkpointInterval != 0) revert BlockNumberOffSchedule();
 
-        bytes32 digest = stateTransitionDigest(domainChainId, domainBlockNumber, newStateRoot, domainAnchor);
+        bytes32 digest = stateTransitionDigest(domainChainId, domainBlockNumber, newBlockHash, domainAnchor);
         address signer = ECDSA.recoverCalldata(digest, signature);
         if (!config.isValidator[signer]) revert NotValidator();
         if (hasVotedFor[digest][signer]) revert AlreadyVoted();
 
         hasVotedFor[digest][signer] = true;
         uint256 votes = ++stateVotes[digest];
-        emit StateSignatureSubmitted(domainChainId, signer, domainBlockNumber, newStateRoot, domainAnchor, votes);
+        emit StateSignatureSubmitted(domainChainId, signer, domainBlockNumber, newBlockHash, domainAnchor, votes);
 
         // Advance exactly once, when the vote count first reaches quorum. The subsequent
         // stateNonce bump changes the digest, so this proposal can never be revisited.
         if (votes == config.quorum) {
             uint256 nonce = stateNonces[domainChainId]++;
-            stateRoots[domainChainId] = newStateRoot;
+            blockHashes[domainChainId] = newBlockHash;
             if (domainAnchor != bytes32(0)) domainAnchors[domainChainId][domainAnchor] = true;
             domainBlockNumbers[domainChainId] = domainBlockNumber;
             // The attested state covers every input up to this height: stop holding them.
@@ -266,7 +267,7 @@ contract DomainHub is IDomainHub, EIP712 {
             InputQueue.release(
                 queue, domainBlockNumber / checkpointInterval, _period(latestL1Block, checkpointInterval)
             );
-            emit DomainStateUpdated(domainChainId, nonce, domainBlockNumber, newStateRoot, domainAnchor);
+            emit DomainStateUpdated(domainChainId, nonce, domainBlockNumber, newBlockHash, domainAnchor);
         }
     }
 

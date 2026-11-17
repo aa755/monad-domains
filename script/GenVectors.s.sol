@@ -50,18 +50,18 @@ contract GenVectors is Script {
         // attesting block 10 with the root of all five leaves as the anchor.
         vm.chainId(VECTOR_CHAIN_ID);
         DomainHub hub = new DomainHub();
-        bytes32 stateRoot = keccak256("state root");
+        bytes32 blockHash = keccak256("block hash");
         bytes32 anchor = MerkleTreeLib.root(leaves);
         console.log("hub chain id", VECTOR_CHAIN_ID);
         console.log("hub address");
         console.logAddress(address(hub));
         console.log("digest domain", VECTOR_DOMAIN, "block", VECTOR_BLOCK);
-        console.log("digest state root");
-        console.logBytes32(stateRoot);
+        console.log("digest block hash");
+        console.logBytes32(blockHash);
         console.log("digest anchor");
         console.logBytes32(anchor);
         console.log("stateTransitionDigest");
-        console.logBytes32(hub.stateTransitionDigest(VECTOR_DOMAIN, VECTOR_BLOCK, stateRoot, anchor));
+        console.logBytes32(hub.stateTransitionDigest(VECTOR_DOMAIN, VECTOR_BLOCK, blockHash, anchor));
 
         // Domain message ID (the anchor leaf) of a withdrawal-shaped message to the L1.
         MessageLib.DomainMessage memory message = MessageLib.DomainMessage({

@@ -118,7 +118,7 @@ const VECTOR_CONTEXT = { l1ChainId: 31337n, hub: "0x5aAdFB43eF8dAF45DD80F4676345
 
 /**
  * EIP-712 state transition digest vector: a fresh hub (stateNonce 0) attesting domain 7777 at
- * block 10 with keccak256("state root") as the root and the 5-leaf tree root as the anchor.
+ * block 10 with keccak256("block hash") as the block hash and the 5-leaf tree root as the anchor.
  */
 test("stateTransitionDigest matches DomainHub.stateTransitionDigest", () => {
   const digest = stateTransitionDigest(
@@ -127,11 +127,11 @@ test("stateTransitionDigest matches DomainHub.stateTransitionDigest", () => {
       domainChainId: 7777n,
       stateNonce: 0n,
       domainBlockNumber: 10n,
-      newStateRoot: keccak256(toHex("state root")),
+      newBlockHash: keccak256(toHex("block hash")),
       domainAnchor: EXPECTED_ROOTS[4]!,
     },
   );
-  assert.equal(digest, "0x0d0b8d03916739143e31e096b5c5be7aa303cbbd90e4ef6a17f6c7e1f4bbff22");
+  assert.equal(digest, "0xb46e49866ff49555d79f7b283095210f84090d7a277d19093d63674b3698772e");
 });
 
 /** Domain message ID vector: the anchor leaf of a withdrawal-shaped message to the L1. */
