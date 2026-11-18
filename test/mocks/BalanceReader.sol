@@ -28,3 +28,16 @@ contract BalanceReader {
         reads += 1;
     }
 }
+
+/// @notice Simulation probe for `eth_createAccessList` `state_overrides` tests: reads
+/// `token.balanceOf(subject)` and touches storage slot `bytes32(balance)` on its own
+/// stateless account (touching no other slot so MIP-8 page deduplication retains the exact key),
+/// causing an unguarded `AccessListTracer` to echo the 256-bit balance in `storageKeys`.
+contract AccessListBalanceProbe {
+    function probe(address token, address subject) external view {
+        uint256 bal = IERC20(token).balanceOf(subject);
+        assembly ("memory-safe") {
+            pop(sload(bal))
+        }
+    }
+}

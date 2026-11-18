@@ -3,9 +3,11 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {DomainSpoke} from "../src/DomainSpoke.sol";
+import {DomainAccessRules} from "../src/access/DomainAccessRules.sol";
 import {IDomainAccessControl} from "../src/interfaces/IDomainAccessControl.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
-import {BrokenPolicy, ConstantPolicy, ExpectingPolicy} from "./mocks/AccessPolicies.sol";
+import {AlwaysAllowPolicy, BrokenPolicy, ConstantPolicy, ExpectingPolicy} from "./mocks/AccessPolicies.sol";
+import {AccessListBalanceProbe} from "./mocks/BalanceReader.sol";
 import {DomainTestBase} from "./helpers/DomainTestBase.sol";
 
 contract DeploymentOwnershipExample {
@@ -297,5 +299,42 @@ contract DomainAccessControlTest is DomainTestBase {
         bytes32 readerSlot = keccak256(abi.encode(alice, keccak256(abi.encode(token, uint256(6)))));
         assertEq(vm.load(address(spoke), ownerSlot), bytes32(uint256(uint160(policyOwner))));
         assertEq(vm.load(address(spoke), readerSlot), bytes32(uint256(1)));
+    }
+
+    /// @dev Demonstrates why domain simulation RPCs (`eth_createAccessList` as well as `eth_call`
+    /// and `eth_estimateGas`) must reject caller-supplied `state_overrides`: replacing `spoke`'s
+    /// runtime code with `AlwaysAllowPolicy` and placing `AccessListBalanceProbe` at an unused
+    /// address lets an unauthorized caller turn Bob's restricted 256-bit `balanceOf(bob)` into a
+    /// touched `storageKey` (`0x000...0071afd0` = 7,450,000) returned by `AccessListTracer`.
+    function test_accessListStateOverrideProbeExtractsRestrictedBalanceViaStorageKey() public {
+        uint256 secretBalance = 7_450_000;
+        TestERC20(token).mint(bob, secretBalance);
+
+        DomainAccessRules rules = new DomainAccessRules(spoke);
+        _policy(token, address(rules));
+        vm.prank(policyOwner);
+        rules.setAccessControl(token, IERC20.balanceOf.selector, DomainAccessRules.AccessMode.SubjectMatch, 1);
+
+        address probeAddr = address(0xdEaD);
+        // Without state overrides, neither `outsider` nor `probeAddr` is permitted to read `bob`.
+        assertFalse(spoke.canCall(outsider, token, _balance(bob)));
+        assertFalse(spoke.canCall(probeAddr, token, _balance(bob)));
+
+        // Simulate `eth_createAccessList`'s `state_overrides`:
+        //   state_overrides[spoke].code     = type(AlwaysAllowPolicy).runtimeCode
+        //   state_overrides[probeAddr].code = type(AccessListBalanceProbe).runtimeCode
+        vm.etch(address(spoke), type(AlwaysAllowPolicy).runtimeCode);
+        vm.etch(probeAddr, type(AccessListBalanceProbe).runtimeCode);
+        assertTrue(spoke.canCall(probeAddr, token, _balance(bob)));
+
+        vm.record();
+        vm.prank(outsider);
+        AccessListBalanceProbe(probeAddr).probe(token, bob);
+
+        (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(probeAddr);
+        assertEq(writes.length, 0);
+        assertEq(reads.length, 1);
+        assertEq(uint256(reads[0]), secretBalance);
+        assertEq(reads[0], bytes32(uint256(0x71afd0)));
     }
 }
