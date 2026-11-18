@@ -3,6 +3,14 @@ pragma solidity ^0.8.24;
 
 import {IDomainAccessPolicy} from "../../src/interfaces/IDomainAccessControl.sol";
 
+/// @notice Answers `true` to every `canCall` query with no constructor immutables, so its
+/// runtime `deployedBytecode` can be dropped directly into RPC `state_overrides[spoke].code`.
+contract AlwaysAllowPolicy is IDomainAccessPolicy {
+    function canCall(address, address, bytes calldata) external pure returns (bool) {
+        return true;
+    }
+}
+
 /// @notice Answers the same verdict to every question.
 contract ConstantPolicy is IDomainAccessPolicy {
     bool public immutable VERDICT;

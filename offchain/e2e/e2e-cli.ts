@@ -535,6 +535,8 @@ async function main() {
   step("5. access control: the client calls spoke.canCall before every domain call frame");
   // -------------------------------------------------------------------------
   const readerArt = loadArtifact("BalanceReader.sol", "BalanceReader");
+  const balanceProbeArt = loadArtifact("BalanceReader.sol", "AccessListBalanceProbe");
+  const alwaysAllowArt = loadArtifact("AccessPolicies.sol", "AlwaysAllowPolicy");
   const PRIVATE_SUPPLY = 1000n * 10n ** 18n;
 
   // These examples use spoke.deployContract; bridged tokens instead register during construction.
@@ -626,6 +628,44 @@ async function main() {
   console.log(`  eth_call bob -> balanceOf(bob): ${bobOwn}`);
   await expectCallDenied("eth_call bob -> balanceOf(alice)", () => readBalance(BOB_KEY, alice.address));
   await expectCallDenied("eth_call admin (policy owner, no grant) -> balanceOf(alice)", () => readBalance(ADMIN_KEY, alice.address));
+
+  // Simulation RPCs on domain routes must also reject `state_overrides` for non-operators:
+  // otherwise an unprivileged caller can override `spoke.code` with `AlwaysAllowPolicy` and
+  // `PROBE_ADDRESS.code` with `AccessListBalanceProbe`, then exfiltrate alice's exact 256-bit
+  // token balance in `eth_createAccessList`'s returned `storageKeys`.
+  const PROBE_ADDRESS = "0x000000000000000000000000000000000000dEaD" as Address;
+  const probeCalldata = encodeFunctionData({
+    abi: balanceProbeArt.abi,
+    functionName: "probe",
+    args: [privateToken, alice.address],
+  });
+  const stateOverrides = {
+    [spoke]: { code: alwaysAllowArt.deployedBytecode },
+    [PROBE_ADDRESS]: { code: balanceProbeArt.deployedBytecode },
+  };
+  await expectForbidden("eth_call bob with state overrides", () =>
+    domainAs(BOB_KEY).request({
+      method: "eth_call" as never,
+      params: [{ from: bob.address, to: PROBE_ADDRESS, data: probeCalldata }, "latest", stateOverrides] as never,
+    }),
+  );
+  await expectForbidden("eth_createAccessList bob with state overrides", async () => {
+    const result = (await domainAs(BOB_KEY).request({
+      method: "eth_createAccessList" as never,
+      params: [{ from: bob.address, to: PROBE_ADDRESS, data: probeCalldata }, "latest", stateOverrides] as never,
+    })) as { accessList?: Array<{ address: Address; storageKeys: Hex[] }> };
+    const probeEntry = result.accessList?.find(
+      (entry) => entry.address.toLowerCase() === PROBE_ADDRESS.toLowerCase(),
+    );
+    const leakedKey = probeEntry?.storageKeys[0];
+    if (leakedKey !== undefined) {
+      const leakedBalance = BigInt(leakedKey);
+      throw new Error(
+        `eth_createAccessList bob with state overrides bypassed spoke.canCall and leaked alice's balance via storageKeys: ${leakedBalance} (alice balance is ${PRIVATE_SUPPLY})`,
+      );
+    }
+  });
+
   const supply = (await domainAs(BOB_KEY).readContract({ address: privateToken, abi: tokenArt.abi, functionName: "totalSupply", account: bob.address })) as bigint;
   if (supply !== PRIVATE_SUPPLY) throw new Error(`totalSupply (unrestricted selector) returned ${supply}`);
   console.log(`  eth_call bob -> totalSupply() (unrestricted selector): ${supply}`);
