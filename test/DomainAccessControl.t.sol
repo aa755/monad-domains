@@ -305,7 +305,7 @@ contract DomainAccessControlTest is DomainTestBase {
     /// and `eth_estimateGas`) must reject caller-supplied `state_overrides`: replacing `spoke`'s
     /// runtime code with `AlwaysAllowPolicy` and placing `AccessListBalanceProbe` at an unused
     /// address lets an unauthorized caller turn Bob's restricted 256-bit `balanceOf(bob)` into a
-    /// touched `storageKey` (`0x000...0071afd0` = 7,450,000) returned by `AccessListTracer`.
+    /// touched `storageKey` (`0x000...0071ad90` = 7,450,000) returned by `AccessListTracer`.
     function test_accessListStateOverrideProbeExtractsRestrictedBalanceViaStorageKey() public {
         uint256 secretBalance = 7_450_000;
         TestERC20(token).mint(bob, secretBalance);
@@ -335,6 +335,6 @@ contract DomainAccessControlTest is DomainTestBase {
         assertEq(writes.length, 0);
         assertEq(reads.length, 1);
         assertEq(uint256(reads[0]), secretBalance);
-        assertEq(reads[0], bytes32(uint256(0x71afd0)));
+        assertEq(reads[0], bytes32(uint256(0x71ad90)));
     }
 }
